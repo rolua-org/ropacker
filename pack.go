@@ -109,8 +109,27 @@ func pack(project_dir, compiler_name, lua_main, output_bin string) error {
 
 	defer outputFile.Close()
 
-	outputFile.Write(bootBinary)
-	outputFile.Write(dataBuf.Bytes())
+	bootWriteLen, err := outputFile.Write(bootBinary)
+	if err != nil {
+		return fmt.Errorf("can not write boot: %v", err)
+	}
+
+	if bootWriteLen != len(bootBinary) {
+		return fmt.Errorf("boot only write %d, need %d", bootWriteLen, len(bootBinary))
+	}
+
+	bufWriteLen, err := outputFile.Write(dataBuf.Bytes())
+	if err != nil {
+		return fmt.Errorf("can not write zip: %v", err)
+	}
+
+	if bufWriteLen != dataBuf.Len() {
+		return fmt.Errorf("zip only write %d, need %d", bufWriteLen, dataBuf.Len())
+	}
+
+	if err := outputFile.Sync(); err != nil {
+		return fmt.Errorf("can not sync write: %v", err)
+	}
 
 	os.Chmod(output_bin, 0777)
 

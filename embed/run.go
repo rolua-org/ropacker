@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -16,11 +15,19 @@ const (
 	TempDirPrefix = "ropacker_run_"
 )
 
-func readBytes(r *bytes.Reader, n int) []byte {
+func readBytes(r *bytes.Reader, n int) ([]byte, error) {
 	b := make([]byte, n)
-	r.Read(b)
 
-	return b
+	readN, err := r.Read(b)
+	if err != nil {
+		return nil, fmt.Errorf("can not read bytes: %v", err)
+	}
+
+	if readN != n {
+		return nil, fmt.Errorf("only read %d, need %d", readN, n)
+	}
+
+	return b, nil
 }
 
 func main() {
@@ -43,14 +50,29 @@ func main() {
 
 	var compilerNameLen, luaEntryLen, zipDataLen uint32
 
-	binary.Read(dataReader, binary.LittleEndian, &compilerNameLen)
-	compilerName := string(readBytes(dataReader, int(compilerNameLen)))
+	compilerNameBytes, err := readBytes(dataReader, int(compilerNameLen))
+	if err != nil {
+		fmt.Println("can not read compiler-name bytes:", err)
+		return
+	}
 
-	binary.Read(dataReader, binary.LittleEndian, &luaEntryLen)
-	luaEntry := string(readBytes(dataReader, int(luaEntryLen)))
+	compilerName := string(compilerNameBytes)
 
-	binary.Read(dataReader, binary.LittleEndian, &zipDataLen)
-	zipData := readBytes(dataReader, int(zipDataLen))
+	luaEntryBytes, err := readBytes(dataReader, int(luaEntryLen))
+	if err != nil {
+		fmt.Println("can not read lua-main bytes:", err)
+		return
+	}
+
+	luaEntry := string(luaEntryBytes)
+
+	zipDataBytes, err := readBytes(dataReader, int(zipDataLen))
+	if err != nil {
+		fmt.Println("can not read zip bytes:", err)
+		return
+	}
+
+	zipData := zipDataBytes
 
 	tempDir, err := os.MkdirTemp("", TempDirPrefix)
 	if err != nil {
