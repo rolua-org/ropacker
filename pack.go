@@ -72,8 +72,8 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	buildCmd := exec.Command(
 		"go", "build",
-		"-gcflags=\"-w -s\"",
-		"-ldflags=\"-w -s -X 'main.version=' -X 'main.commit='\"",
+		"-gcflags=-w -s",
+		"-ldflags=-w -s -X main.version= -X main.commit=",
 		"-o", tmpBin,
 		tmpEntryGo,
 	)
