@@ -14,8 +14,8 @@ func main() {
 		return
 	}
 
-	project_dir := args[0]
-	compiler_name := args[1]
+	project_dir := args[1]
+	compiler_name := args[2]
 	lua_main := args[3]
 	output_bin := "rolua-packed"
 
