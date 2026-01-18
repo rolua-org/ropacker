@@ -70,7 +70,13 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	defer os.Remove(tmpBin)
 
-	buildCmd := exec.Command("go", "build", "-o", tmpBin, tmpEntryGo)
+	buildCmd := exec.Command(
+		"go", "build",
+		"-gcflags=\"-w -s\"",
+		"-ldflags=\"-w -s -X 'main.version=' -X 'main.commit='\"",
+		"-o", tmpBin,
+		tmpEntryGo,
+	)
 	buildCmd.Env = os.Environ()
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
