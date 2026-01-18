@@ -14,19 +14,19 @@ func main() {
 		return
 	}
 
-	project_dir := args[1]
-	compiler_name := args[2]
-	lua_main := args[3]
-	output_bin := "rolua-packed"
+	projectDir := args[1]
+	compilerName := args[2]
+	luaMain := args[3]
+	outputBin := "rolua-packed"
 
 	if len(args) == 5 {
-		output_bin = args[4]
+		outputBin = args[4]
 
 	} else {
 		if runtime.GOOS == "windows" {
-			output_bin = output_bin + ".exe"
+			outputBin = outputBin + ".exe"
 		}
 	}
 
-	pack(project_dir, compiler_name, lua_main, output_bin)
+	pack(projectDir, compilerName, luaMain, outputBin)
 }
