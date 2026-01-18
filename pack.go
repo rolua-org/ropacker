@@ -15,11 +15,16 @@ import (
 //go:embed tpl/entry.tpl.go
 var entryGoTemplate string
 
+// Pack 对外暴露的核心打包函数，参数规则完全不变
+// projectDir: 项目根目录(绝对/相对)，内部所有文件都会被打包
+// compilerName: 相对于projectDir的编译器二进制路径
+// luaMain: 相对于projectDir的lua入口文件路径
+// outputBin: 可选，相对于当前目录的输出产物路径，默认值：当前目录的lua_app(lua_app.exe)
 func pack(projectDir, compilerName, luaMain, outputBin string) {
 	// 1. 补全默认输出路径
 	if outputBin == "" {
 		outputBin = "lua_app"
-		if filepath.Base(os.Args[0]) == "lua_app.exe" || runtime.GOOS == "windows" {
+		if runtime.GOOS == "windows" {
 			outputBin += ".exe"
 		}
 	}
