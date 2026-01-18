@@ -11,14 +11,19 @@ import (
 	"path/filepath"
 )
 
+const (
+	DataMarker    = "###ROPACKER_DATA_PART_START###"
+	TempDirPrefix = "ropacker_run_"
+)
+
 func readBytes(r *bytes.Reader, n int) []byte {
 	b := make([]byte, n)
-
 	r.Read(b)
+
 	return b
 }
 
-func runMode() {
+func main() {
 	selfPath := os.Args[0]
 
 	selfBinary, err := os.ReadFile(selfPath)
@@ -67,7 +72,6 @@ func runMode() {
 
 		srcFile, _ := zipFile.Open()
 		dstFile, _ := os.Create(targetPath)
-
 		io.Copy(dstFile, srcFile)
 
 		srcFile.Close()

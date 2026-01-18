@@ -1,24 +1,34 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"runtime"
 )
-
-const (
-	PackFlag      = "-pack"
-	DataMarker    = "###ROLUA_DATA###"
-	TempDirPrefix = "rolua_pack_"
-)
-
-var OutputBinary = "rolua-app"
 
 func main() {
 	args := os.Args
 
-	if len(args) >= 2 && args[1] == PackFlag {
-		packMode(args)
+	if len(args) < 4 {
+		fmt.Println("Usage: ropacker <project-dir> <compiler-name> <lua-main> [output-bin]")
 		return
 	}
 
-	runMode()
+	project_dir := args[0]
+	compiler_name := args[1]
+	lua_main := args[3]
+	output_bin := "rolua-packed"
+
+	if len(args) == 5 {
+		output_bin = args[4]
+
+	} else {
+		if runtime.GOOS == "windows" {
+			output_bin = output_bin + ".exe"
+		}
+	}
+
+	if err := pack(project_dir, compiler_name, lua_main, output_bin); err != nil {
+		fmt.Println("pack failed:", err)
+	}
 }
