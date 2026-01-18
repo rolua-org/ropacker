@@ -28,7 +28,5 @@ func main() {
 		}
 	}
 
-	if err := pack(project_dir, compiler_name, lua_main, output_bin); err != nil {
-		fmt.Println("pack failed:", err)
-	}
+	pack(project_dir, compiler_name, lua_main, output_bin)
 }

@@ -3,136 +3,104 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"embed"
-	"encoding/binary"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"text/template"
 )
 
-const DataMarker = "###ROPACKER_DATA_PART_START###"
+//go:embed tpl/entry.tpl.go
+var entryGoTemplate string
 
-//go:embed embed/*
-var runFS embed.FS
-
-func pack(project_dir, compiler_name, lua_main, output_bin string) error {
-	compiler_name_path := filepath.Join(project_dir, compiler_name)
-	lua_main_path := filepath.Join(project_dir, lua_main)
-
-	if _, err := os.Stat(project_dir); os.IsNotExist(err) {
-		return fmt.Errorf("project-dir not exist: %v", err)
+func pack(projectDir, compilerName, luaMain, outputBin string) {
+	// 1. 补全默认输出路径
+	if outputBin == "" {
+		outputBin = "lua_app"
+		if filepath.Base(os.Args[0]) == "lua_app.exe" || runtime.GOOS == "windows" {
+			outputBin += ".exe"
+		}
 	}
 
-	if _, err := os.Stat(compiler_name_path); os.IsNotExist(err) {
-		return fmt.Errorf("compiler-name not exist: %v", err)
+	// 2. 校验项目目录是否存在
+	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
+		fmt.Printf("❌ 错误：项目目录 [%s] 不存在\n", projectDir)
+		os.Exit(1)
 	}
 
-	if _, err := os.Stat(lua_main_path); os.IsNotExist(err) {
-		return fmt.Errorf("lua-main not exist: %v", err)
+	// 3. 生成临时的入口Go文件（打包完成后自动删除）
+	tmpEntryGo := filepath.Join(os.TempDir(), "lua_pack_entry.go")
+	defer os.Remove(tmpEntryGo)
+
+	// 4. 渲染模板：注入编译器路径、lua入口路径
+	tpl, err := template.New("luaEntry").Parse(entryGoTemplate)
+	if err != nil {
+		fmt.Printf("❌ 解析入口模板失败: %v\n", err)
+		os.Exit(1)
 	}
+	f, err := os.Create(tmpEntryGo)
+	if err != nil {
+		fmt.Printf("❌ 创建临时入口文件失败: %v\n", err)
+		os.Exit(1)
+	}
+	_ = tpl.Execute(f, map[string]string{
+		"CompilerPath": compilerName,
+		"LuaMainPath":  luaMain,
+	})
+	_ = f.Close()
 
-	fmt.Println("Building...")
-
+	// 5. 打包projectDir下所有文件为zip内存缓冲区
 	zipBuf := new(bytes.Buffer)
-	zipWriter := zip.NewWriter(zipBuf)
-
-	defer zipWriter.Close()
-
-	err := filepath.Walk(project_dir, func(filePath string, info os.FileInfo, err error) error {
+	zipW := zip.NewWriter(zipBuf)
+	err = filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
-
-		relPath, _ := filepath.Rel(project_dir, filePath)
-		zipFile, _ := zipWriter.Create(relPath)
-
-		fileData, _ := os.ReadFile(filePath)
-		zipFile.Write(fileData)
-
+		relPath, _ := filepath.Rel(projectDir, path)
+		zipFile, _ := zipW.Create(relPath)
+		fileContent, _ := os.ReadFile(path)
+		_, _ = zipFile.Write(fileContent)
 		return nil
 	})
-
 	if err != nil {
-		return fmt.Errorf("compress zip failed: %v", err)
+		fmt.Printf("❌ 打包项目文件失败: %v\n", err)
+		os.Exit(1)
+	}
+	_ = zipW.Close()
+
+	// 6. 调用go build编译临时入口文件，继承所有环境变量
+	tmpBin := filepath.Join(os.TempDir(), "lua_pack_tmp_bin")
+	if runtime.GOOS == "windows" {
+		tmpBin += ".exe"
+	}
+	defer os.Remove(tmpBin)
+
+	buildCmd := exec.Command("go", "build", "-o", tmpBin, tmpEntryGo)
+	buildCmd.Env = os.Environ() // 核心：继承所有系统环境变量
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		fmt.Printf("❌ Go编译入口文件失败: %v\n", err)
+		os.Exit(1)
 	}
 
-	zipData := zipBuf.Bytes()
-
-	tempDir, err := os.MkdirTemp("", "rolua_boot_")
+	// 7. 合并：编译后的二进制 + 标记 + zip数据 = 最终产物
+	tmpBinContent, _ := os.ReadFile(tmpBin)
+	outFile, err := os.Create(outputBin)
 	if err != nil {
-		return fmt.Errorf("create temp dir failed: %v", err)
+		fmt.Printf("❌ 创建输出文件失败: %v\n", err)
+		os.Exit(1)
 	}
+	defer outFile.Close()
 
-	defer os.RemoveAll(tempDir)
+	// 写入编译后的Go二进制
+	_, _ = outFile.Write(tmpBinContent)
+	// 写入分隔标记
+	_, _ = outFile.Write([]byte("===LUA_PACK_ZIP_START==="))
+	// 写入zip压缩的项目所有文件
+	_, _ = outFile.Write(zipBuf.Bytes())
 
-	bootSourcePath := filepath.Join(tempDir, "run.go")
-	bootBinaryPath := filepath.Join(tempDir, "run")
-
-	templateData, err := runFS.ReadFile("embed/run.go")
-	if err != nil {
-		return fmt.Errorf("read run.go failed: %v", err)
-	}
-
-	os.WriteFile(bootSourcePath, templateData, 0644)
-
-	cmd := exec.Command("go", "build", "-o", bootBinaryPath, bootSourcePath)
-	cmd.Env = os.Environ()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("compile bootstrap failed: %v", err)
-	}
-
-	bootBinary, err := os.ReadFile(bootBinaryPath)
-	if err != nil {
-		return fmt.Errorf("read bootstrap binary failed: %v", err)
-	}
-
-	dataBuf := new(bytes.Buffer)
-	dataBuf.WriteString(DataMarker)
-
-	binary.Write(dataBuf, binary.LittleEndian, uint32(len(compiler_name)))
-	dataBuf.WriteString(compiler_name)
-
-	binary.Write(dataBuf, binary.LittleEndian, uint32(len(lua_main)))
-	dataBuf.WriteString(lua_main)
-
-	binary.Write(dataBuf, binary.LittleEndian, uint32(len(zipData)))
-	dataBuf.Write(zipData)
-
-	outputFile, err := os.Create(output_bin)
-	if err != nil {
-		return fmt.Errorf("create output-bin failed: %v", err)
-	}
-
-	defer outputFile.Close()
-
-	bootWriteLen, err := outputFile.Write(bootBinary)
-	if err != nil {
-		return fmt.Errorf("can not write boot: %v", err)
-	}
-
-	if bootWriteLen != len(bootBinary) {
-		return fmt.Errorf("boot only write %d, need %d", bootWriteLen, len(bootBinary))
-	}
-
-	bufWriteLen, err := outputFile.Write(dataBuf.Bytes())
-	if err != nil {
-		return fmt.Errorf("can not write zip: %v", err)
-	}
-
-	if bufWriteLen != dataBuf.Len() {
-		return fmt.Errorf("zip only write %d, need %d", bufWriteLen, dataBuf.Len())
-	}
-
-	if err := outputFile.Sync(); err != nil {
-		return fmt.Errorf("can not sync write: %v", err)
-	}
-
-	os.Chmod(output_bin, 0777)
-
-	fmt.Println("Build success! Output to", output_bin)
-	return nil
+	fmt.Printf("✅ 打包成功！输出产物: %s\n", outputBin)
 }
