@@ -26,9 +26,14 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	fmt.Println("正在解析执行器代码...")
 
-	tmpDir := os.TempDir()
+	buildDir, err := os.MkdirTemp("", "ropacker-build-*")
+	if err != nil {
+		panic(err)
+	}
 
-	tmpEntryGo := filepath.Join(tmpDir, "main.go")
+	defer os.RemoveAll(buildDir)
+
+	tmpEntryGo := filepath.Join(buildDir, "main.go")
 	defer os.Remove(tmpEntryGo)
 
 	tpl, err := template.New("luaEntry").Parse(entryGoTemplate)
@@ -88,7 +93,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	fmt.Println("正在编译执行器...")
 
-	tmpBin := filepath.Join(tmpDir, "lua_pack_tmp_bin")
+	tmpBin := filepath.Join(buildDir, "lua_pack_tmp_bin")
 	if runtime.GOOS == "windows" {
 		tmpBin += ".exe"
 	}
@@ -100,7 +105,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 		panic(fmt.Errorf("can not get current path: %v", err))
 	}
 
-	if err := os.Chdir(tmpDir); err != nil {
+	if err := os.Chdir(buildDir); err != nil {
 		panic(fmt.Errorf("can not change work dir: %v", err))
 	}
 
