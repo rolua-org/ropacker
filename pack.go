@@ -26,7 +26,9 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	fmt.Println("正在解析执行器代码...")
 
-	tmpEntryGo := filepath.Join(os.TempDir(), "lua_pack_entry.go")
+	tmpDir := os.TempDir()
+
+	tmpEntryGo := filepath.Join(tmpDir, "main.go")
 	defer os.Remove(tmpEntryGo)
 
 	tpl, err := template.New("luaEntry").Parse(entryGoTemplate)
@@ -86,20 +88,36 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	fmt.Println("正在编译执行器...")
 
-	tmpBin := filepath.Join(os.TempDir(), "lua_pack_tmp_bin")
+	tmpBin := filepath.Join(tmpDir, "lua_pack_tmp_bin")
 	if runtime.GOOS == "windows" {
 		tmpBin += ".exe"
 	}
 
 	defer os.Remove(tmpBin)
 
-	buildCmd := exec.Command("go", "build", "-ldflags=-s -w -extldflags=-static -X main.version= -X main.commit=", "-o", tmpBin, tmpEntryGo)
-	buildCmd.Env = os.Environ()
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(fmt.Errorf("can not get current path: %v", err))
+	}
 
-	if err := buildCmd.Run(); err != nil {
+	if err := os.Chdir(tmpDir); err != nil {
+		panic(fmt.Errorf("can not change work dir: %v", err))
+	}
+
+	if err := runCommand("go", "mod", "init", "temp_entry"); err != nil {
+		panic(fmt.Errorf("can not execute go mod init: %v", err))
+	}
+
+	if err := runCommand("go", "mod", "tidy"); err != nil {
+		panic(fmt.Errorf("can not execute go get: %v", err))
+	}
+
+	if err := runCommand("go", "build", "-ldflags=-s -w -extldflags=-static -X main.version= -X main.commit=", "-o", tmpBin); err != nil {
 		panic(fmt.Errorf("can not execute go build: %v", err))
+	}
+
+	if err := os.Chdir(cwd); err != nil {
+		panic(fmt.Errorf("can not change work dir: %v", err))
 	}
 
 	fmt.Println("正在生成最终产物...")
@@ -118,4 +136,14 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 	outFile.Write(compressedBuf.Bytes())
 
 	fmt.Println("打包成功, 产物文件:", outputBin)
+}
+
+func runCommand(name string, arg ...string) error {
+	cmd := exec.Command(name, arg...)
+
+	cmd.Env = os.Environ()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }
