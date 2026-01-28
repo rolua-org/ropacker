@@ -114,7 +114,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 	}
 
 	if err := runCommand("go", "mod", "tidy"); err != nil {
-		panic(fmt.Errorf("can not execute go get: %v", err))
+		panic(fmt.Errorf("can not execute go mod tidy: %v", err))
 	}
 
 	if err := runCommand("go", "build", "-ldflags=-s -w -extldflags=-static -X main.version= -X main.commit=", "-o", tmpBin); err != nil {
