@@ -50,7 +50,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	compressedBuf := new(bytes.Buffer)
 
-	zstdW, err := zstd.NewWriter(compressedBuf, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(22)))
+	zstdW, err := zstd.NewWriter(compressedBuf, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(20)))
 	if err != nil {
 		panic(fmt.Errorf("failed to initialize zstd writer: %v", err))
 	}
