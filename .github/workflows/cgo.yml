@@ -15,11 +15,11 @@ jobs:
     strategy:
       matrix:
         targets:
-          - "!(*musl*|*windows-arm64*|*android*|*freebsd*|*windows7*)"
-          - "linux-*-musl*"
-          - "windows-arm64"
-          - "android-*"
-          - "freebsd-*"
+          - "*darwin*"
+          - "*freebsd*"
+          - "*linux*"
+          - "*windows*"
+          - "*android*"
 
     runs-on: ubuntu-latest
 
