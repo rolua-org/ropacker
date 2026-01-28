@@ -114,7 +114,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 	defer outFile.Close()
 
 	outFile.Write(tmpBinContent)
-	outFile.Write([]byte("===LUA_PACK_ZIP_START==="))
+	outFile.Write([]byte("===LUA_PACK_START==="))
 	outFile.Write(compressedBuf.Bytes())
 
 	fmt.Println("打包成功, 产物文件:", outputBin)

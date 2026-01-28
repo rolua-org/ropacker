@@ -1,7 +1,7 @@
 package main
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"bytes"
 	"fmt"
 	"io"
@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func main() {
@@ -29,7 +31,6 @@ func main() {
 	if err != nil {
 		panic(fmt.Errorf("can not open self bin: %v", err))
 	}
-
 	defer f.Close()
 
 	content, err := io.ReadAll(f)
@@ -37,19 +38,14 @@ func main() {
 		panic(fmt.Errorf("can not read self bin: %v", err))
 	}
 
-	zipMarker := []byte("===LUA_PACK_ZIP_START===")
-	_, zipData, found := bytes.Cut(content, zipMarker)
+	zstdMarker := []byte("===LUA_PACK_START===")
+	_, zstdData, found := bytes.Cut(content, zstdMarker)
 	if !found {
-		panic(fmt.Errorf("can not find marker"))
+		panic(fmt.Errorf("can not find zstd marker"))
 	}
 
-	zipTmpFile := filepath.Join(tmpDir, "project.zip")
-	if err := os.WriteFile(zipTmpFile, zipData, 0644); err != nil {
-		panic(fmt.Errorf("can not write temp zip: %v", err))
-	}
-
-	if err := unzip(zipTmpFile, tmpDir); err != nil {
-		panic(fmt.Errorf("can not extract zip: %v", err))
+	if err := untarZstd(zstdData, tmpDir); err != nil {
+		panic(fmt.Errorf("can not extract zstd/tar: %v", err))
 	}
 
 	if err := os.Chdir(tmpDir); err != nil {
@@ -84,38 +80,54 @@ func main() {
 	}
 }
 
-func unzip(zipFile, destDir string) error {
-	r, err := zip.OpenReader(zipFile)
+func untarZstd(data []byte, destDir string) error {
+	zr, err := zstd.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 
-	defer r.Close()
+	defer zr.Close()
 
-	for _, f := range r.File {
-		fpath := filepath.Join(destDir, f.Name)
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, os.ModePerm)
-			continue
+	tr := tar.NewReader(zr)
+
+	for {
+		header, err := tr.Next()
+
+		if err == io.EOF {
+			break
 		}
 
-		os.MkdirAll(filepath.Dir(fpath), os.ModePerm)
-
-		inFile, err := f.Open()
 		if err != nil {
 			return err
 		}
 
-		defer inFile.Close()
+		target := filepath.Join(destDir, header.Name)
 
-		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			return err
+		switch header.Typeflag {
+
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return err
+			}
+
+			f.Close()
+
 		}
-
-		defer outFile.Close()
-
-		io.Copy(outFile, inFile)
 	}
 
 	return nil
