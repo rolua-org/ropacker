@@ -1,7 +1,7 @@
 package main
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"bytes"
 	_ "embed"
 	"fmt"
@@ -10,15 +10,21 @@ import (
 	"path/filepath"
 	"runtime"
 	"text/template"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 //go:embed tpl/entry.tpl.go
 var entryGoTemplate string
 
 func pack(projectDir, compilerName, luaMain, outputBin string) {
+	fmt.Println("ropacker 将会打包", projectDir, "内的所有文件, 并使用", compilerName, "作为解释器, 打包产物为", outputBin, ", 运行时将执行", luaMain, "内的代码")
+
 	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
 		panic(fmt.Errorf("%s not exist", projectDir))
 	}
+
+	fmt.Println("正在解析执行器代码...")
 
 	tmpEntryGo := filepath.Join(os.TempDir(), "lua_pack_entry.go")
 	defer os.Remove(tmpEntryGo)
@@ -40,8 +46,16 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	f.Close()
 
-	zipBuf := new(bytes.Buffer)
-	zipW := zip.NewWriter(zipBuf)
+	fmt.Println("正在打包项目文件...")
+
+	compressedBuf := new(bytes.Buffer)
+
+	zstdW, err := zstd.NewWriter(compressedBuf, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(22)))
+	if err != nil {
+		panic(fmt.Errorf("failed to initialize zstd writer: %v", err))
+	}
+
+	tarW := tar.NewWriter(zstdW)
 
 	err = filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
@@ -49,19 +63,28 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 		}
 
 		relPath, _ := filepath.Rel(projectDir, path)
-		zipFile, _ := zipW.Create(relPath)
+
+		header, _ := tar.FileInfoHeader(info, "")
+		header.Name = relPath
+
+		if err := tarW.WriteHeader(header); err != nil {
+			return err
+		}
 
 		fileContent, _ := os.ReadFile(path)
-		zipFile.Write(fileContent)
+		tarW.Write(fileContent)
 
 		return nil
 	})
 
 	if err != nil {
-		panic(fmt.Errorf("can not write zip: %v", err))
+		panic(fmt.Errorf("compression failed: %v", err))
 	}
 
-	zipW.Close()
+	tarW.Close()
+	zstdW.Close()
+
+	fmt.Println("正在编译执行器...")
 
 	tmpBin := filepath.Join(os.TempDir(), "lua_pack_tmp_bin")
 	if runtime.GOOS == "windows" {
@@ -79,6 +102,8 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 		panic(fmt.Errorf("can not execute go build: %v", err))
 	}
 
+	fmt.Println("正在生成最终产物...")
+
 	tmpBinContent, _ := os.ReadFile(tmpBin)
 
 	outFile, err := os.Create(outputBin)
@@ -90,7 +115,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	outFile.Write(tmpBinContent)
 	outFile.Write([]byte("===LUA_PACK_ZIP_START==="))
-	outFile.Write(zipBuf.Bytes())
+	outFile.Write(compressedBuf.Bytes())
 
-	fmt.Println("Build success! Output to", outputBin)
+	fmt.Println("打包成功, 产物文件:", outputBin)
 }
