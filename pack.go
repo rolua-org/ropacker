@@ -1,7 +1,7 @@
 package main
 
 import (
-	"archive/tar"
+	"archive/zip"
 	"bytes"
 	_ "embed"
 	"fmt"
@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"text/template"
-
-	"github.com/klauspost/compress/zstd"
 )
 
 //go:embed tpl/entry.tpl.go
@@ -26,14 +24,7 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	fmt.Println("正在解析执行器代码...")
 
-	buildDir, err := os.MkdirTemp("", "ropacker-build-*")
-	if err != nil {
-		panic(err)
-	}
-
-	defer os.RemoveAll(buildDir)
-
-	tmpEntryGo := filepath.Join(buildDir, "main.go")
+	tmpEntryGo := filepath.Join(os.TempDir(), "lua_pack_entry.go")
 	defer os.Remove(tmpEntryGo)
 
 	tpl, err := template.New("luaEntry").Parse(entryGoTemplate)
@@ -55,14 +46,8 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 
 	fmt.Println("正在打包项目文件...")
 
-	compressedBuf := new(bytes.Buffer)
-
-	zstdW, err := zstd.NewWriter(compressedBuf, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(22)))
-	if err != nil {
-		panic(fmt.Errorf("failed to initialize zstd writer: %v", err))
-	}
-
-	tarW := tar.NewWriter(zstdW)
+	zipBuf := new(bytes.Buffer)
+	zipW := zip.NewWriter(zipBuf)
 
 	err = filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
@@ -70,59 +55,36 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 		}
 
 		relPath, _ := filepath.Rel(projectDir, path)
-
-		header, _ := tar.FileInfoHeader(info, "")
-		header.Name = relPath
-
-		if err := tarW.WriteHeader(header); err != nil {
-			return err
-		}
+		zipFile, _ := zipW.Create(relPath)
 
 		fileContent, _ := os.ReadFile(path)
-		tarW.Write(fileContent)
+		zipFile.Write(fileContent)
 
 		return nil
 	})
 
 	if err != nil {
-		panic(fmt.Errorf("compression failed: %v", err))
+		panic(fmt.Errorf("can not write zip: %v", err))
 	}
 
-	tarW.Close()
-	zstdW.Close()
+	zipW.Close()
 
 	fmt.Println("正在编译执行器...")
 
-	tmpBin := filepath.Join(buildDir, "lua_pack_tmp_bin")
+	tmpBin := filepath.Join(os.TempDir(), "lua_pack_tmp_bin")
 	if runtime.GOOS == "windows" {
 		tmpBin += ".exe"
 	}
 
 	defer os.Remove(tmpBin)
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		panic(fmt.Errorf("can not get current path: %v", err))
-	}
+	buildCmd := exec.Command("go", "build", "-ldflags=-s -w -extldflags=-static -X main.version= -X main.commit=", "-o", tmpBin, tmpEntryGo)
+	buildCmd.Env = os.Environ()
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
 
-	if err := os.Chdir(buildDir); err != nil {
-		panic(fmt.Errorf("can not change work dir: %v", err))
-	}
-
-	if err := runCommand("go", "mod", "init", "temp_entry"); err != nil {
-		panic(fmt.Errorf("can not execute go mod init: %v", err))
-	}
-
-	if err := runCommand("go", "mod", "tidy"); err != nil {
-		panic(fmt.Errorf("can not execute go mod tidy: %v", err))
-	}
-
-	if err := runCommand("go", "build", "-ldflags=-s -w -extldflags=-static -X main.version= -X main.commit=", "-o", tmpBin); err != nil {
+	if err := buildCmd.Run(); err != nil {
 		panic(fmt.Errorf("can not execute go build: %v", err))
-	}
-
-	if err := os.Chdir(cwd); err != nil {
-		panic(fmt.Errorf("can not change work dir: %v", err))
 	}
 
 	fmt.Println("正在生成最终产物...")
@@ -137,18 +99,8 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 	defer outFile.Close()
 
 	outFile.Write(tmpBinContent)
-	outFile.Write([]byte("===LUA_PACK_START==="))
-	outFile.Write(compressedBuf.Bytes())
+	outFile.Write([]byte("===LUA_PACK_ZIP_START==="))
+	outFile.Write(zipBuf.Bytes())
 
 	fmt.Println("打包成功, 产物文件:", outputBin)
-}
-
-func runCommand(name string, arg ...string) error {
-	cmd := exec.Command(name, arg...)
-
-	cmd.Env = os.Environ()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
 }
