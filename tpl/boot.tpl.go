@@ -51,8 +51,9 @@ func main() {
 
 	chdir(tmp)
 
+	name := filepath.Join(tmp, compiler)
 	args := append([]string{lua}, os.Args[1:]...)
-	run(compiler, args...)
+	run(name, args...)
 }
 
 func chdir(path string) {
