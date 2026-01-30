@@ -2,105 +2,176 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
+	"html/template"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"text/template"
 )
 
-//go:embed tpl/entry.tpl.go
-var entryGoTemplate string
+const bootfn string = "boot.tpl.go"
+
+//go:embed tpl/boot.tpl.go
+var boottpl string
 
 func pack(projectDir, compilerName, luaMain, outputBin string) {
 	fmt.Println("ropacker 将会打包", projectDir, "内的所有文件, 并使用", compilerName, "作为解释器, 打包产物为", outputBin, ", 运行时将执行", luaMain, "内的代码")
 
-	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
-		panic(fmt.Errorf("%s not exist", projectDir))
-	}
+	fmt.Println("切换临时工作目录...")
 
-	fmt.Println("正在解析执行器代码...")
-
-	tmpEntryGo := filepath.Join(os.TempDir(), "lua_pack_entry.go")
-	defer os.Remove(tmpEntryGo)
-
-	tpl, err := template.New("luaEntry").Parse(entryGoTemplate)
+	cwd, err := os.Getwd()
 	if err != nil {
-		panic(fmt.Errorf("can not parse template: %v", err))
+		panic(fmt.Errorf("can not get current dir: %v", err))
 	}
 
-	f, err := os.Create(tmpEntryGo)
+	tmp, err := os.MkdirTemp(os.TempDir(), "ropacker-job-*")
 	if err != nil {
-		panic(fmt.Errorf("can not create temp entry file: %v", err))
+		panic(fmt.Errorf("can not create temp dir: %v", err))
 	}
 
-	tpl.Execute(f, map[string]string{
-		"CompilerPath": compilerName,
-		"LuaMainPath":  luaMain,
+	defer os.RemoveAll(tmp)
+
+	chdir(tmp)
+
+	fmt.Println("编译启动器...")
+
+	bootl, err := template.New("boot").Parse(boottpl)
+	if err != nil {
+		panic(fmt.Errorf("can not parse tpl: %v", err))
+	}
+
+	bootf, err := os.Create(bootfn)
+	if err != nil {
+		panic(fmt.Errorf("can not create boot: %v", err))
+	}
+
+	defer bootf.Close()
+
+	bootl.Execute(bootf, map[string]string{
+		"compiler": compilerName,
+		"lua":      luaMain,
 	})
 
-	f.Close()
+	run("go", "build", "-ldflags=-s -w -extldflags=-static", "-o", "boot", bootfn)
 
-	fmt.Println("正在打包项目文件...")
+	fmt.Println("复制项目文件...")
 
-	zipBuf := new(bytes.Buffer)
-	zipW := zip.NewWriter(zipBuf)
+	proj := filepath.Join(cwd, projectDir)
+	compress(proj, "proj")
 
-	err = filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
+	fmt.Println("生成最终产物...")
+
+	chdir(cwd)
+
+	dist, err := os.Create(outputBin)
+	if err != nil {
+		panic(fmt.Errorf("can not create dist: %v", err))
+	}
+
+	defer dist.Close()
+
+	bootp := filepath.Join(tmp, "boot")
+	projp := filepath.Join(tmp, "proj")
+
+	appendf(dist, bootp)
+	appendf(dist, projp)
+
+	booti, err := os.Stat(bootp)
+	if err != nil {
+		panic(fmt.Errorf("can not get boot info: %v", err))
+	}
+
+	bootlen := booti.Size()
+	lenbuf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(lenbuf, uint64(bootlen))
+
+	if _, err := dist.Write(lenbuf); err != nil {
+		panic(fmt.Errorf("can not write size suffix: %v", err))
+	}
+
+	dist.Sync()
+	os.Chmod(outputBin, 0755)
+
+	fmt.Println("打包完成")
+}
+
+func chdir(path string) {
+	if err := os.Chdir(path); err != nil {
+		panic(fmt.Errorf("can not change work dir: %v", err))
+	}
+}
+
+func run(name string, arg ...string) {
+	cmd := exec.Command(name, arg...)
+
+	cmd.Env = os.Environ()
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		panic(fmt.Errorf("can not run command: %v", err))
+	}
+}
+
+func compress(dir, out string) {
+	outf, err := os.Create(out)
+	if err != nil {
+		panic(fmt.Errorf("can not create zip: %v", err))
+	}
+
+	defer outf.Close()
+
+	zipW := zip.NewWriter(outf)
+
+	err = filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
 
-		relPath, _ := filepath.Rel(projectDir, path)
-		zipFile, _ := zipW.Create(relPath)
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
 
-		fileContent, _ := os.ReadFile(path)
-		zipFile.Write(fileContent)
+		dst, err := zipW.Create(rel)
+		if err != nil {
+			return err
+		}
 
-		return nil
+		src, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+
+		_, copyErr := io.Copy(dst, src)
+		src.Close()
+
+		return copyErr
 	})
 
 	if err != nil {
-		panic(fmt.Errorf("can not write zip: %v", err))
+		panic(fmt.Errorf("can not walk/write zip: %v", err))
 	}
 
-	zipW.Close()
-
-	fmt.Println("正在编译执行器...")
-
-	tmpBin := filepath.Join(os.TempDir(), "lua_pack_tmp_bin")
-	if runtime.GOOS == "windows" {
-		tmpBin += ".exe"
+	if err := zipW.Close(); err != nil {
+		panic(fmt.Errorf("can not close zip: %v", err))
 	}
+}
 
-	defer os.Remove(tmpBin)
-
-	buildCmd := exec.Command("go", "build", "-ldflags=-s -w -extldflags=-static -X main.version= -X main.commit=", "-o", tmpBin, tmpEntryGo)
-	buildCmd.Env = os.Environ()
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-
-	if err := buildCmd.Run(); err != nil {
-		panic(fmt.Errorf("can not execute go build: %v", err))
-	}
-
-	fmt.Println("正在生成最终产物...")
-
-	tmpBinContent, _ := os.ReadFile(tmpBin)
-
-	outFile, err := os.Create(outputBin)
+func appendf(f *os.File, src string) {
+	bin, err := os.Open(src)
 	if err != nil {
-		panic(fmt.Errorf("can not create output file: %v", err))
+		panic(fmt.Errorf("can not open file: %v", err))
 	}
 
-	defer outFile.Close()
+	defer bin.Close()
 
-	outFile.Write(tmpBinContent)
-	outFile.Write([]byte("===LUA_PACK_ZIP_START==="))
-	outFile.Write(zipBuf.Bytes())
-
-	fmt.Println("打包成功, 产物文件:", outputBin)
+	if _, err := io.Copy(f, bin); err != nil {
+		panic(fmt.Errorf("copy error: %v", err))
+	}
 }
