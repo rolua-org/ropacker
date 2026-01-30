@@ -74,5 +74,5 @@ jobs:
           tag_name: ${{ github.event.inputs.ver }}
           files: |
             cgo-build-dist/*
-          name: Release ${{ github.event.inputs.ver }}
+          name: ${{ github.event.inputs.ver }}
           token: ${{ secrets.CUSTOM_GITHUB_TOKEN }}
