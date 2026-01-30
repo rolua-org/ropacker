@@ -53,6 +53,8 @@ func main() {
 
 	name := filepath.Join(tmp, compiler)
 	args := append([]string{lua}, os.Args[1:]...)
+
+	os.Chmod(name, 0755)
 	run(name, args...)
 }
 
