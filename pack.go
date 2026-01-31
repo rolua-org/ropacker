@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	_ "embed"
 	"encoding/binary"
 	"fmt"
@@ -62,7 +63,23 @@ func pack(projectDir, compilerName, luaMain, outputBin string) {
 	fmt.Println("复制项目文件...")
 
 	proj := filepath.Join(cwd, projectDir)
-	compress(proj, "proj")
+	ignore := filepath.Join(cwd, "ropacker-ignore")
+	ignores := []string{}
+
+	if ignoref, err := os.Open(ignore); err == nil {
+		defer ignoref.Close()
+
+		scanner := bufio.NewScanner(ignoref)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+
+			if line != "" {
+				ignores = append(ignores, line)
+			}
+		}
+	}
+
+	compress(proj, "proj", ignores)
 
 	fmt.Println("生成最终产物...")
 
@@ -119,7 +136,7 @@ func run(name string, arg ...string) {
 	}
 }
 
-func compress(dir, out string) {
+func compress(dir, out string, ignores []string) {
 	outf, err := os.Create(out)
 	if err != nil {
 		panic(fmt.Errorf("can not create zip: %v", err))
@@ -130,13 +147,19 @@ func compress(dir, out string) {
 	zipW := zip.NewWriter(outf)
 
 	err = filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil || info.IsDir() || strings.Contains(path, "__ignore__") {
+		if err != nil || info.IsDir() {
 			return err
 		}
 
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
 			return err
+		}
+
+		for _, ig := range ignores {
+			if rel == ig || strings.HasPrefix(rel, ig+string(filepath.Separator)) {
+				return nil
+			}
 		}
 
 		dst, err := zipW.Create(rel)
