@@ -162,6 +162,8 @@ func compress(dir, out string, ignores []string) {
 			}
 		}
 
+		fmt.Println(" =>", rel)
+
 		dst, err := zipW.Create(rel)
 		if err != nil {
 			return err
