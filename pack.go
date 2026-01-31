@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const bootfn string = "boot.tpl.go"
@@ -129,7 +130,7 @@ func compress(dir, out string) {
 	zipW := zip.NewWriter(outf)
 
 	err = filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil || info.IsDir() || strings.Contains(path, "__ignore__") {
 			return err
 		}
 
